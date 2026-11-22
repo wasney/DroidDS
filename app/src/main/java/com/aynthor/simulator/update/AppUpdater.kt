@@ -2,7 +2,10 @@ package com.aynthor.simulator.update
 
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -19,19 +22,22 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
+import java.util.Locale
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 /**
  * Checks GitHub Releases (wasney/DroidDS) for newer DroiDS builds (both prereleases and
- * stable releases), downloads the APK into cacheDir/updates/, and hands off to Android's
- * native package installer via FileProvider.
+ * stable releases), downloads the APK on its own dedicated thread (never blocking service
+ * or focus calls), verifies HTTPS GitHub host, Content-Length, and matching signing
+ * certificate, then hands off to Android's native package installer via FileProvider.
  */
 class AppUpdater(
     private val activity: Activity,
-    private val prefs: SimulatorPrefs,
-    private val executor: ExecutorService
+    private val prefs: SimulatorPrefs
 ) {
     companion object {
         const val GITHUB_REPO_URL = "https://github.com/wasney/DroidDS"
@@ -40,6 +46,7 @@ class AppUpdater(
         private const val RELEASES_API_URL = "https://api.github.com/repos/wasney/DroidDS/releases?per_page=10"
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val READ_TIMEOUT_MS = 15_000
+        private const val MAX_REDIRECTS = 5
     }
 
     data class ReleaseInfo(
@@ -52,16 +59,23 @@ class AppUpdater(
         val apkFileName: String?
     )
 
+    private val updateExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "DroiDS-Updater").apply { isDaemon = true }
+    }
     private val mainHandler = Handler(Looper.getMainLooper())
     private val isChecking = AtomicBoolean(false)
+
+    fun shutdown() {
+        updateExecutor.shutdownNow()
+    }
 
     fun getCurrentVersionName(): String {
         return try {
             val pm = activity.packageManager
             val info = pm.getPackageInfo(activity.packageName, 0)
-            info.versionName ?: "2.9.0-pre"
+            info.versionName ?: "2.9.6-pre"
         } catch (_: Throwable) {
-            "2.9.0-pre"
+            "2.9.6-pre"
         }
     }
 
@@ -82,7 +96,7 @@ class AppUpdater(
             Toast.makeText(activity, "Checking GitHub Releases…", Toast.LENGTH_SHORT).show()
         }
 
-        executor.execute {
+        updateExecutor.execute {
             try {
                 val latest = fetchLatestRelease()
                 val current = getCurrentVersionName()
@@ -233,6 +247,85 @@ class AppUpdater(
         builder.show()
     }
 
+    private fun isTrustedGitHubDownloadUrl(url: URL): Boolean {
+        if (!url.protocol.equals("https", ignoreCase = true)) return false
+        val host = url.host.lowercase(Locale.US)
+        return host == "github.com" ||
+            host == "api.github.com" ||
+            host.endsWith(".github.com") ||
+            host.endsWith(".githubusercontent.com")
+    }
+
+    private fun openVerifiedDownloadConnection(initialUrl: String): HttpURLConnection {
+        var currentUrl = URL(initialUrl)
+        for (hop in 0..MAX_REDIRECTS) {
+            if (!isTrustedGitHubDownloadUrl(currentUrl)) {
+                throw SecurityException("Refusing untrusted download host: ${currentUrl.protocol}://${currentUrl.host}")
+            }
+            val conn = (currentUrl.openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                connectTimeout = CONNECT_TIMEOUT_MS
+                readTimeout = 30_000
+                setRequestProperty("User-Agent", "DroiDS-Android-Updater")
+            }
+            val code = conn.responseCode
+            if (code in 300..399) {
+                val location = conn.getHeaderField("Location")
+                conn.disconnect()
+                if (location.isNullOrBlank()) {
+                    throw IllegalStateException("Redirect missing Location header (HTTP $code)")
+                }
+                currentUrl = URL(currentUrl, location)
+                continue
+            }
+            if (code !in 200..299) {
+                conn.disconnect()
+                throw IllegalStateException("HTTP $code")
+            }
+            return conn
+        }
+        throw IllegalStateException("Too many redirects while downloading APK")
+    }
+
+    private fun extractSigningDigests(info: PackageInfo?): Set<String> {
+        val signingInfo = info?.signingInfo ?: return emptySet()
+        val signatures = if (signingInfo.hasMultipleSigners()) {
+            signingInfo.apkContentsSigners
+        } else {
+            signingInfo.signingCertificateHistory
+        } ?: return emptySet()
+        val md = MessageDigest.getInstance("SHA-256")
+        return signatures.map { sig ->
+            md.reset()
+            md.digest(sig.toByteArray()).joinToString("") { b -> "%02x".format(b) }
+        }.toSet()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun verifyApkSignatureMatchesInstalled(apkFile: File) {
+        val pm = activity.packageManager
+        val flags = PackageManager.GET_SIGNING_CERTIFICATES
+        val installedInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getPackageInfo(activity.packageName, PackageManager.PackageInfoFlags.of(flags.toLong()))
+        } else {
+            pm.getPackageInfo(activity.packageName, flags)
+        }
+        val archiveInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.PackageInfoFlags.of(flags.toLong()))
+        } else {
+            pm.getPackageArchiveInfo(apkFile.absolutePath, flags)
+        } ?: throw SecurityException("Downloaded file is not a valid Android APK.")
+
+        if (archiveInfo.packageName != activity.packageName) {
+            throw SecurityException("APK package ID (${archiveInfo.packageName}) does not match ${activity.packageName}.")
+        }
+        val installedDigests = extractSigningDigests(installedInfo)
+        val archiveDigests = extractSigningDigests(archiveInfo)
+        if (installedDigests.isEmpty() || archiveDigests.isEmpty() || installedDigests != archiveDigests) {
+            throw SecurityException("APK signing certificate does not match the installed DroiDS app.")
+        }
+    }
+
     private fun downloadAndInstallApk(release: ReleaseInfo) {
         val apkUrl = release.apkDownloadUrl ?: run {
             openUrl(release.htmlUrl)
@@ -272,24 +365,16 @@ class AppUpdater(
             .create()
         dialog.show()
 
-        executor.execute {
+        updateExecutor.execute {
             var conn: HttpURLConnection? = null
+            var outFile: File? = null
             try {
                 val updatesDir = File(activity.cacheDir, "updates").apply { mkdirs() }
-                // Clean up any stale APKs first
                 updatesDir.listFiles()?.forEach { it.delete() }
-                val outFile = File(updatesDir, "DroiDS-update.apk")
+                val targetFile = File(updatesDir, "DroiDS-update.apk")
+                outFile = targetFile
 
-                conn = (URL(apkUrl).openConnection() as HttpURLConnection).apply {
-                    instanceFollowRedirects = true
-                    connectTimeout = CONNECT_TIMEOUT_MS
-                    readTimeout = 30_000
-                    setRequestProperty("User-Agent", "DroiDS-Android-Updater")
-                }
-                val code = conn.responseCode
-                if (code !in 200..299) {
-                    throw IllegalStateException("HTTP $code")
-                }
+                conn = openVerifiedDownloadConnection(apkUrl)
 
                 val totalBytes = conn.contentLengthLong
                 var downloaded = 0L
@@ -297,10 +382,10 @@ class AppUpdater(
                 var lastUiUpdate = 0L
 
                 conn.inputStream.use { input ->
-                    FileOutputStream(outFile).use { output ->
+                    FileOutputStream(targetFile).use { output ->
                         while (true) {
                             if (cancelled.get()) {
-                                outFile.delete()
+                                targetFile.delete()
                                 return@execute
                             }
                             val read = input.read(buffer)
@@ -328,19 +413,35 @@ class AppUpdater(
                     }
                 }
 
+                if (downloaded <= 0L) {
+                    targetFile.delete()
+                    throw IllegalStateException("Downloaded APK is empty.")
+                }
+                if (totalBytes > 0L && downloaded != totalBytes) {
+                    targetFile.delete()
+                    throw IllegalStateException("Incomplete download ($downloaded / $totalBytes bytes).")
+                }
+
+                mainHandler.post {
+                    statusText.text = "Verifying APK signature…"
+                    progressBar.isIndeterminate = true
+                }
+                verifyApkSignatureMatchesInstalled(targetFile)
+
                 mainHandler.post {
                     if (dialog.isShowing) dialog.dismiss()
                     if (!activity.isFinishing && !activity.isDestroyed && !cancelled.get()) {
-                        triggerApkInstall(outFile)
+                        triggerApkInstall(targetFile)
                     }
                 }
             } catch (e: Throwable) {
+                outFile?.delete()
                 mainHandler.post {
                     if (dialog.isShowing) dialog.dismiss()
                     if (!activity.isFinishing && !activity.isDestroyed && !cancelled.get()) {
                         AlertDialog.Builder(activity)
                             .setTitle("Download Failed")
-                            .setMessage("Couldn't download the APK (${e.message ?: "error"}). You can still grab it directly from GitHub Releases.")
+                            .setMessage("Couldn't install the APK (${e.message ?: "error"}). You can still grab it directly from GitHub Releases.")
                             .setPositiveButton("Open GitHub") { _, _ -> openUrl(release.htmlUrl) }
                             .setNegativeButton("Close", null)
                             .show()

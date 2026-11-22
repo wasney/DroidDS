@@ -14,17 +14,27 @@ And let's be honest: if you really wanted an AYN Thor or a similar dual-screen h
 
 ---
 
-## Features (v2.9.0-pre)
+## Features (v2.9.6-pre)
 
 * **True Dual Virtual Displays (No Root):** Uses [Shizuku](https://github.com/RikkaApps/Shizuku-API) (`UID 2000` shell service) to create two independent trusted virtual screens so dual-screen emulators and recompilations (SeedlessDS, DraStic, Azahar, melonDS, Cemu, and more) run natively across both displays, or you can multitask with any two Android apps at once.
-* **Interactive Touch & Toolbar Layout Editor:** Drag all 10 virtual gamepad controls (`D-Pad`, `L/R` analog sticks with `L3/R3`, `ABXY`, `L1/L2/R1/R2`, `SELECT/START`) and both utility toolbars anywhere on screen (including over the displays), adjust per-item **Size (`60%–150%`)** and **Opacity (`20%–100%`)**, toggle **Grid Snap**, and drag the live **Screen Split** divider—saved independently for **Landscape** and **Portrait**.
+* **Interactive Touch & Toolbar Layout Editor:** Drag all 10 virtual gamepad controls (`D-Pad`, `L/R` analog sticks with `L3/R3`, `ABXY`, `L1/L2/R1/R2`, `SELECT/START`) and both utility toolbars anywhere on screen (including over the displays), adjust per-item **Size (`60%–150%`)** and **Opacity (`20%–100%`)**, toggle **Grid Snap**, and drag the live **Screen Split** divider—saved independently per **orientation (Landscape / Portrait)** and **control mode** (D-Pad only, Stick only, ABXY only, or Combo).
 * **Low-Latency Kernel Gamepad + Physical Controller Support:**
   * Virtual controls register a native kernel Xbox 360 gamepad via `/dev/uinput` for fast, stall-free input with optional haptics, 4-Way D-Pad lock, and **Xbox / Nintendo** face button layouts.
   * Automatic physical controller detection (tested with GameSir) hides on-screen controls, drops sidebar margins for full-width bottom display space, and automatically switches the bottom display between **Thor (`1240:1080`)** for dual-screen emulators (zero stretching) and native full-width **Fill** for browsers, YouTube, and companion apps.
-* **Modern Bottom-Anchored Quick Settings & Auto-Updater:** Two-pane translucent Settings sheet with a thumb-reachable left icon rail, swipe-down/tap-top dismissal, live preview, and an **About & Updates** tab featuring GitHub Releases auto/manual update checks with in-app APK install, Debug/Crash Logs, links, and credits.
+* **Modern Bottom-Anchored Quick Settings & Auto-Updater:** Two-pane translucent Settings sheet with a thumb-reachable left icon rail, swipe-down/tap-top dismissal, live preview, and an **About & Updates** tab featuring GitHub Releases auto/manual update checks with signature-verified in-app APK install, Debug/Crash Logs, links, and credits.
 * **Built-In First-Launch Setup Guide:** Interactive Shizuku setup checklist with live status checkmarks, 1-tap shortcuts to **Download / Open Shizuku**, **Developer Options**, and **Battery Settings**, plus offline usage tips.
 * **Configurable Bottom Home & Quick Control Center:** Handheld dashboard with toggleable **Clock**, **Live Performance Monitor** (CPU, GPU, RAM, Battery), **Quick Shortcuts**, **Brightness & Volume sliders**, **Wi-Fi / Bluetooth** shortcuts, and an **AMOLED Dim / Sleep Bottom Screen** overlay.
-* **Power-User App Drawers, Profiles & Backups:** Live search, Recently Launched row, custom folders, Dual-Screen app toggles, **Per-App Layout Profiles** (long-press any app), live **Screen Swap**, quick-return pill for paused dual-screen games, and full **JSON Settings Backup & Restore**.
+* **Power-User App Drawers, In-Grid Folders & Backups:** In-grid folders with 2×2 mini-icon previews (tap to open, long-press to rename/edit/delete), One UI-style **multi-select**, 1-tap **Auto-Organize into Folders**, live search across all folders, Recently Launched row, Dual-Screen app toggles, **Per-App Layout Profiles**, live **Screen Swap**, quick-return pill for paused dual-screen games, and full **JSON Settings Backup & Restore**.
+
+---
+
+## Permissions & Privacy
+
+Because DroiDS runs a local Shizuku (`UID 2000`) service, it's important to be transparent about what every permission is used for:
+
+* **Shizuku (`UID 2000`):** Used strictly on-device to create the two virtual displays, launch apps onto them, and register the local `/dev/uinput` virtual controller.
+* **`INTERNET`:** Used *only* by the optional GitHub Releases update checker (`api.github.com` and `github.com` / `githubusercontent.com` over HTTPS). There is no analytics, telemetry, or third-party tracking. You can disable automatic startup update checks anytime in **Settings → About & Updates**.
+* **`REQUEST_INSTALL_PACKAGES`:** Used *only* when you explicitly tap **Download & Install** on an update. Before launching Android's package installer, DroiDS verifies the download came from an HTTPS GitHub host, checks `Content-Length`, and confirms the APK's signing certificate matches the installed app.
 
 ---
 

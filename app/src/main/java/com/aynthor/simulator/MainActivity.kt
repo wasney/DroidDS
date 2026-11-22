@@ -206,7 +206,7 @@ class MainActivity : AppCompatActivity() {
             .daemon(false)
             .processNameSuffix("virtual_display_service")
             .debuggable(false)
-            .version(65)
+            .version(66)
     }
 
     private val serviceConnection = object : ServiceConnection {
@@ -339,7 +339,7 @@ class MainActivity : AppCompatActivity() {
         Shizuku.addRequestPermissionResultListener(permissionResultListener)
         inputManager.registerInputDeviceListener(inputDeviceListener, null)
 
-        appUpdater = AppUpdater(this, prefs, ioExecutor)
+        appUpdater = AppUpdater(this, prefs)
 
         if (!prefs.isOnboardingCompleted()) {
             onboardingOverlay.refreshTheme(isLightThemeActive)
@@ -2587,7 +2587,7 @@ class MainActivity : AppCompatActivity() {
             am.getMemoryInfo(mi)
             val totalGb = mi.totalMem / (1024.0 * 1024.0 * 1024.0)
             val usedGb = (mi.totalMem - mi.availMem) / (1024.0 * 1024.0 * 1024.0)
-            binding.tvPerfFps.text = String.format(Locale.US, "RAM: %.1f / %.0f GB", usedGb, totalGb)
+            binding.tvPerfRam.text = String.format(Locale.US, "RAM: %.1f / %.0f GB", usedGb, totalGb)
 
             val svc = userService
             val topDisp = primaryDisplayId
@@ -2662,7 +2662,7 @@ class MainActivity : AppCompatActivity() {
         binding.tvBottomLauncherTitle.setTextColor(primaryText)
         binding.tvHomeClock.setTextColor(primaryText)
         binding.tvHomeDate.setTextColor(secondaryText)
-        binding.tvPerfFps.setTextColor(primaryText)
+        binding.tvPerfRam.setTextColor(primaryText)
         binding.tvPerfCpu.setTextColor(secondaryText)
         binding.tvPerfGpu.setTextColor(secondaryText)
 
@@ -3071,6 +3071,9 @@ class MainActivity : AppCompatActivity() {
         teardownShizukuDisplays()
         uiHandler.removeCallbacks(homeRefreshRunnable)
         perfExecutor.shutdownNow()
+        if (::appUpdater.isInitialized) {
+            appUpdater.shutdown()
+        }
         ioExecutor.shutdownNow()
         inputExecutor.shutdownNow()
     }
