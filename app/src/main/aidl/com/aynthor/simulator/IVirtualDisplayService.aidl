@@ -75,4 +75,8 @@ interface IVirtualDisplayService {
     String getPerformanceStats(int displayId) = 14;
 
     boolean resizeBottomDisplay(int width, int height, int dpi) = 15;
+
+    boolean reclaimEscapedPackage(String packageName, int targetDisplayId, String hostPackageName) = 16;
+
+    String getDisplayTasksSummary() = 17;
 }

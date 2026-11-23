@@ -783,6 +783,88 @@ class VirtualDisplayUserService(private val baseContext: Context) : IVirtualDisp
         }
     }
 
+    private fun extractComponentName(taskInfo: Any): String? {
+        return try {
+            val topAct = taskInfo.javaClass.getField("topActivity").get(taskInfo) as? android.content.ComponentName
+            val baseAct = taskInfo.javaClass.getField("baseActivity").get(taskInfo) as? android.content.ComponentName
+            (topAct ?: baseAct)?.flattenToShortString()
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    override fun reclaimEscapedPackage(packageName: String, targetDisplayId: Int, hostPackageName: String): Boolean {
+        if (targetDisplayId <= 0 ||
+            !PACKAGE_NAME_REGEX.matches(packageName) ||
+            packageName == hostPackageName
+        ) {
+            return false
+        }
+        val atm = activityTaskManager ?: return false
+        return try {
+            val display0Tasks = getTasksOnDisplay(0)
+            if (display0Tasks.isEmpty()) return false
+            val moveMethod = atm.javaClass.getMethod(
+                "moveRootTaskToDisplay",
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType
+            )
+            var movedAny = false
+            var wasTopOnDisplay0 = false
+            var hostTaskId = -1
+            for ((idx, task) in display0Tasks.withIndex()) {
+                val taskId = extractTaskId(task)
+                val pkg = extractPackageName(task)
+                if (pkg == hostPackageName && hostTaskId <= 0) {
+                    hostTaskId = taskId
+                }
+                if (pkg == packageName && taskId > 0) {
+                    if (idx == 0) wasTopOnDisplay0 = true
+                    val comp = extractComponentName(task)
+                    moveMethod.invoke(atm, taskId, targetDisplayId)
+                    movedAny = true
+                    log("reclaimEscapedPackage($packageName): moved task=$taskId ($comp) from display 0 -> $targetDisplayId")
+                }
+            }
+            if (movedAny) {
+                invalidateFocusCache()
+                if (wasTopOnDisplay0 && hostTaskId > 0) {
+                    try {
+                        val focusMethod = atm.javaClass.getMethod("setFocusedRootTask", Int::class.javaPrimitiveType)
+                        focusMethod.invoke(atm, hostTaskId)
+                    } catch (_: Throwable) {
+                    }
+                }
+                focusDisplay(-targetDisplayId)
+            }
+            movedAny
+        } catch (e: Throwable) {
+            log("reclaimEscapedPackage($packageName -> $targetDisplayId) failed", e)
+            false
+        }
+    }
+
+    override fun getDisplayTasksSummary(): String {
+        val ids = listOfNotNull(
+            0,
+            topDisplay?.display?.displayId?.takeIf { it > 0 },
+            bottomDisplay?.display?.displayId?.takeIf { it > 0 }
+        )
+        return buildString {
+            for (id in ids) {
+                val tasks = getTasksOnDisplay(id)
+                val desc = if (tasks.isEmpty()) {
+                    "(none)"
+                } else {
+                    tasks.take(5).joinToString(", ") { t ->
+                        "task=${extractTaskId(t)} ${extractComponentName(t) ?: extractPackageName(t) ?: "?"}"
+                    }
+                }
+                appendLine("Display $id: $desc")
+            }
+        }.trimEnd()
+    }
+
     override fun swapTasksBetweenDisplays(topDisplayId: Int, bottomDisplayId: Int): Boolean {
         val atm = activityTaskManager ?: return false
         return try {

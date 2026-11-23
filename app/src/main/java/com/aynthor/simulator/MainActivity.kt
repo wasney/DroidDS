@@ -206,7 +206,7 @@ class MainActivity : AppCompatActivity() {
             .daemon(false)
             .processNameSuffix("virtual_display_service")
             .debuggable(false)
-            .version(66)
+            .version(67)
     }
 
     private val serviceConnection = object : ServiceConnection {
@@ -2416,11 +2416,19 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Throwable) {
                 "(Failed to read UserService log: ${e.message})"
             }
+            val displayTasks = try {
+                userService?.displayTasksSummary ?: "(UserService not bound)"
+            } catch (e: Throwable) {
+                "(Failed to read display tasks: ${e.message})"
+            }
             val fullLog = buildString {
                 appendLine("=== Device & Shizuku ===")
                 appendLine("Model: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} (SDK ${android.os.Build.VERSION.SDK_INT})")
                 appendLine("Shizuku alive: ${Shizuku.pingBinder()}, Bound: $isServiceBound")
                 appendLine("Primary(1920x1080) ID: $primaryDisplayId, Secondary(1240x1080) ID: $secondaryDisplayId, Swapped: $isSwapped")
+                appendLine()
+                appendLine("=== Active Display Tasks ===")
+                appendLine(displayTasks)
                 val crashFile = java.io.File(filesDir, "last_crash.txt")
                 if (crashFile.exists()) {
                     val crashText = try { crashFile.readText().take(3000) } catch (_: Throwable) { "" }
@@ -3029,6 +3037,31 @@ class MainActivity : AppCompatActivity() {
         if (launcherAdapter.itemCount > 0) launcherAdapter.setSelectedPosition(0)
     }
 
+    private fun scheduleEscapedAppReclaim(retryIfUnfound: Boolean) {
+        val pkg = activeTopPackage ?: return
+        val targetDisplay = primaryDisplayId
+        val service = userService ?: return
+        if (targetDisplay <= 0 || pkg == packageName) return
+        ioExecutor.execute {
+            try {
+                if (retryIfUnfound) {
+                    Thread.sleep(140L)
+                }
+                var reclaimed = service.reclaimEscapedPackage(pkg, targetDisplay, packageName)
+                if (!reclaimed && retryIfUnfound) {
+                    Thread.sleep(280L)
+                    reclaimed = service.reclaimEscapedPackage(pkg, targetDisplay, packageName)
+                }
+                if (reclaimed) {
+                    runOnUiThread {
+                        addLocalLog("Auto-reclaimed escaped $pkg task back to display $targetDisplay")
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         if (::onboardingOverlay.isInitialized) {
@@ -3036,11 +3069,16 @@ class MainActivity : AppCompatActivity() {
         }
         if (!isServiceBound || !Shizuku.pingBinder()) {
             checkShizukuAndBind()
+        } else {
+            scheduleEscapedAppReclaim(retryIfUnfound = false)
         }
     }
 
     override fun onPause() {
         super.onPause()
+        if (!isFinishing && !isChangingConfigurations) {
+            scheduleEscapedAppReclaim(retryIfUnfound = true)
+        }
         // Release any held virtual keys so nothing stays stuck when switching apps
         keyRepeatRunnables.values.forEach { uiHandler.removeCallbacks(it) }
         pendingKeyUpRunnables.values.forEach { uiHandler.removeCallbacks(it) }

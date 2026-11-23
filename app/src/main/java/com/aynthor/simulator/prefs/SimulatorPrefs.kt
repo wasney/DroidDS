@@ -100,7 +100,8 @@ class SimulatorPrefs(context: Context) {
             "org.citra.citra_emu",
             "org.lime3ds.android",
             "me.magnum.melonds",
-            "info.cemu.cemu"
+            "info.cemu.cemu",
+            "dev.nxnative.android.peanuts"
         )
     }
 
