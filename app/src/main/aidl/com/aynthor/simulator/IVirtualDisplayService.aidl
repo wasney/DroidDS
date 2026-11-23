@@ -76,7 +76,7 @@ interface IVirtualDisplayService {
 
     boolean resizeBottomDisplay(int width, int height, int dpi) = 15;
 
-    boolean reclaimEscapedPackage(String packageName, int targetDisplayId, String hostPackageName) = 16;
+    int reclaimEscapedPackage(String packageName, int primaryDisplayId, int secondaryDisplayId, String hostPackageName) = 16;
 
     String getDisplayTasksSummary() = 17;
 }

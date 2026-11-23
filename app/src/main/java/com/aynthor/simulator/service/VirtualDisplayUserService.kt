@@ -793,23 +793,40 @@ class VirtualDisplayUserService(private val baseContext: Context) : IVirtualDisp
         }
     }
 
-    override fun reclaimEscapedPackage(packageName: String, targetDisplayId: Int, hostPackageName: String): Boolean {
-        if (targetDisplayId <= 0 ||
+    private var reclaimWindowStartMs = 0L
+    private var reclaimCountInWindow = 0
+    private var reclaimCooldownUntilMs = 0L
+
+    override fun reclaimEscapedPackage(
+        packageName: String,
+        primaryDisplayId: Int,
+        secondaryDisplayId: Int,
+        hostPackageName: String
+    ): Int {
+        if (primaryDisplayId <= 0 ||
             !PACKAGE_NAME_REGEX.matches(packageName) ||
             packageName == hostPackageName
         ) {
-            return false
+            return 0
         }
-        val atm = activityTaskManager ?: return false
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now < reclaimCooldownUntilMs) {
+            return 0
+        }
+        val atm = activityTaskManager ?: return 0
         return try {
             val display0Tasks = getTasksOnDisplay(0)
-            if (display0Tasks.isEmpty()) return false
+            if (display0Tasks.isEmpty()) return 0
+
+            val primaryTasks = getTasksOnDisplay(primaryDisplayId)
+            val alreadyRunningOnPrimary = primaryTasks.any { extractPackageName(it) == packageName }
+
             val moveMethod = atm.javaClass.getMethod(
                 "moveRootTaskToDisplay",
                 Int::class.javaPrimitiveType,
                 Int::class.javaPrimitiveType
             )
-            var movedAny = false
+            var movedTarget = 0
             var wasTopOnDisplay0 = false
             var hostTaskId = -1
             for ((idx, task) in display0Tasks.withIndex()) {
@@ -820,13 +837,34 @@ class VirtualDisplayUserService(private val baseContext: Context) : IVirtualDisp
                 }
                 if (pkg == packageName && taskId > 0) {
                     if (idx == 0) wasTopOnDisplay0 = true
-                    val comp = extractComponentName(task)
-                    moveMethod.invoke(atm, taskId, targetDisplayId)
-                    movedAny = true
-                    log("reclaimEscapedPackage($packageName): moved task=$taskId ($comp) from display 0 -> $targetDisplayId")
+                    val comp = extractComponentName(task).orEmpty()
+                    val compLower = comp.lowercase(Locale.US)
+                    val isSecondaryScreenActivity = alreadyRunningOnPrimary ||
+                        compLower.contains("companion") ||
+                        compLower.contains("secondary") ||
+                        compLower.contains("bottom") ||
+                        compLower.contains("subscreen")
+                    val destDisplayId = if (isSecondaryScreenActivity && secondaryDisplayId > 0) {
+                        secondaryDisplayId
+                    } else {
+                        primaryDisplayId
+                    }
+                    moveMethod.invoke(atm, taskId, destDisplayId)
+                    movedTarget = destDisplayId
+                    log("reclaimEscapedPackage($packageName): moved task=$taskId ($comp) from display 0 -> $destDisplayId (onPrimary=$alreadyRunningOnPrimary)")
                 }
             }
-            if (movedAny) {
+            if (movedTarget > 0) {
+                if (now - reclaimWindowStartMs > 3_000L) {
+                    reclaimWindowStartMs = now
+                    reclaimCountInWindow = 1
+                } else {
+                    reclaimCountInWindow++
+                    if (reclaimCountInWindow >= 4) {
+                        reclaimCooldownUntilMs = now + 10_000L
+                        log("reclaimEscapedPackage($packageName): loop protection triggered, pausing reclaim for 10s")
+                    }
+                }
                 invalidateFocusCache()
                 if (wasTopOnDisplay0 && hostTaskId > 0) {
                     try {
@@ -835,12 +873,13 @@ class VirtualDisplayUserService(private val baseContext: Context) : IVirtualDisp
                     } catch (_: Throwable) {
                     }
                 }
-                focusDisplay(-targetDisplayId)
+                // Always keep controller focus on primaryDisplayId so the game stays active
+                focusDisplay(-primaryDisplayId)
             }
-            movedAny
+            movedTarget
         } catch (e: Throwable) {
-            log("reclaimEscapedPackage($packageName -> $targetDisplayId) failed", e)
-            false
+            log("reclaimEscapedPackage($packageName) failed", e)
+            0
         }
     }
 

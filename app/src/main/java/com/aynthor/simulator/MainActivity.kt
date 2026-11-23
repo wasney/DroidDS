@@ -206,7 +206,7 @@ class MainActivity : AppCompatActivity() {
             .daemon(false)
             .processNameSuffix("virtual_display_service")
             .debuggable(false)
-            .version(67)
+            .version(68)
     }
 
     private val serviceConnection = object : ServiceConnection {
@@ -3039,22 +3039,27 @@ class MainActivity : AppCompatActivity() {
 
     private fun scheduleEscapedAppReclaim(retryIfUnfound: Boolean) {
         val pkg = activeTopPackage ?: return
-        val targetDisplay = primaryDisplayId
+        val topDisplay = primaryDisplayId
+        val bottomDisplay = secondaryDisplayId
         val service = userService ?: return
-        if (targetDisplay <= 0 || pkg == packageName) return
+        if (topDisplay <= 0 || pkg == packageName) return
         ioExecutor.execute {
             try {
                 if (retryIfUnfound) {
                     Thread.sleep(140L)
                 }
-                var reclaimed = service.reclaimEscapedPackage(pkg, targetDisplay, packageName)
-                if (!reclaimed && retryIfUnfound) {
+                var movedDisplay = service.reclaimEscapedPackage(pkg, topDisplay, bottomDisplay, packageName)
+                if (movedDisplay <= 0 && retryIfUnfound) {
                     Thread.sleep(280L)
-                    reclaimed = service.reclaimEscapedPackage(pkg, targetDisplay, packageName)
+                    movedDisplay = service.reclaimEscapedPackage(pkg, topDisplay, bottomDisplay, packageName)
                 }
-                if (reclaimed) {
+                if (movedDisplay > 0) {
                     runOnUiThread {
-                        addLocalLog("Auto-reclaimed escaped $pkg task back to display $targetDisplay")
+                        if (movedDisplay == secondaryDisplayId) {
+                            binding.bottomHomeOverlay.visibility = View.GONE
+                            binding.bottomLauncherOverlay.visibility = View.GONE
+                        }
+                        addLocalLog("Auto-routed escaped $pkg task to display $movedDisplay")
                     }
                 }
             } catch (_: Throwable) {
